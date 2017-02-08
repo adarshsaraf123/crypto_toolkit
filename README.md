@@ -1,5 +1,6 @@
 # crypto_toolkit
 A set of cryptographic tools exposed in a simple user interface for most common usages. 
+We also provide a set of guidelines for common cryptographic uses tying them to the methods provided in this toolkit.
 
 ## Background
 We create this simple toolkit in order to enable users exploit cryptographic techniques for data security without actually having to know about them. We provide simple APIs for common use scenarios using the Python `cryptography` module.
