@@ -3,66 +3,68 @@ Created on 14-Jan-2017
 
 @author: adarsh
 '''
+
 import hashlib
 import os
 import base64
 import base58
 from privad.exceptions import IncorrectPasswordError
+from secretsharing.sharing import PlaintextToHexSecretSharer
+import ssl
 # We will be using base58 encoding for all our keys as is the convention followed in protocols
 # like Bitcoin, Ripple, BigchainDB for human readability 
 
-USE_SCRYPT = False
+# the scrypt library is available only in OpenSSL v1.1 onwards
+# hence we check the openssl version and set the USE_SCRYPT flag is the openssl version is
+# greater than 1.1
+
+version1, version2 = map(int, ssl.OPENSSL_VERSION.split()[1].split('.')[:2])
+if version1 > 1 and version2 > 1:
+    # implies the openssl version is above 1.1 and hence scrypt will be available   
+    USE_SCRYPT = True
+else:
+    USE_SCRYPT = False
+
+NUM_ITERATIONS_PBKDF2 = 100000
 
 # generate_keypair is used in other modules; we want to club all the crypto utilities together
 # here
 from bigchaindb_driver.crypto import generate_keypair
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes 
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC 
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend, openssl
+from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.exceptions import UnsupportedAlgorithm, InvalidKey
  
 class Base58Encoder(object):
-
+    '''
+    Why Base58 encoding? The original Bitcoin client source code explains:
+        < Why base-58 instead of standard base-64 encoding?
+        < Don't want 0OIl characters that look the same in some fonts and could be used to create visually identical looking account numbers.
+        < A string with non-alphanumeric characters is not as easily accepted as an account number.
+        < E-mail usually won't line-break if there's no punctuation to break at.
+        < Doubleclicking selects the whole number as one word if it's all alphanumeric.
+    '''
     @staticmethod
     def encode(data):
+        # base58.b58encode takes bytes as input and returns a string, hence the encode() here to get output as bytes
         return base58.b58encode(data).encode()
 
     @staticmethod
     def decode(data):
+        # base58.b58decode takes bytes/str as input and produces bytes
         return base58.b58decode(data)
  
-# def hash_password(password):
-#     '''
-#     To generate the salted hash of the parameter password.
-#     Returns the hashed password.
-#     
-#     We use uuid to generate a random salt.
-#     The salt is suffixed to the generated hash after a ':'
-#     '''
-#     # uuid is used to generate a random number
-#     salt = get_random_number()
-#     return hashlib.sha256(salt.encode() + password.encode()).hexdigest() + ':' + salt
-#     
-# def check_password(hashed_password, user_password):
-#     '''
-#     To check if the user supplied user_password matches the hashed_password available.
-#     Returns True is the password supplied is correct else False.
-#     '''
-#     password, salt = hashed_password.split(':')
-#     return password == hashlib.sha256(salt.encode() + user_password.encode()).hexdigest()
-
-def get_random_number(size = 16):
+def get_random_string(size = 16):
     '''
-    Get a random number.
-    The size parameter specifies the number of bytes in the random number generated.
+    Get a random string of the specified `size` number of bytes.
     The default size of 16 is acceptable for salts, etc. 
-    Returns the Base58 encoded random number.
+    Returns the random string as bytes.
     '''
-    return Base58Encoder.encode(os.urandom(size))
+    return os.urandom(size)
 
-def generate_key_from_password(password, salt = None, length = 128, iterations = 100000):
+def generate_key_from_password(password, salt = None, length = 128):
     '''
     Given the password (`bytes`) to be used for key derivation and an optional salt this function
     derives the key using the PBKDF2HMAC kdf from the cryptography library. 
@@ -72,10 +74,10 @@ def generate_key_from_password(password, salt = None, length = 128, iterations =
     
     The key length can also be optionally specified with the default value of 128.
     
-    Returns a (key, salt) tuple where the key is a (base58 encoded) `bytes` array.
+    Returns a (key, salt) tuple where the key is a (base58 encoded) `bytes` array, and the salt is base58 encoded.
     
-    We return only the salt and not the length and iterations since the user is expected to know
-    the other two while the salt might not have been specified by the user and hence has to be
+    We return only the salt and not the length since the user is expected to know the length
+    while the salt might not have been specified by the user and hence has to be
     informed of the salt. To keep the interface uniform we return the salt even when the salt
     has been specified by the user.   
     '''
@@ -83,12 +85,13 @@ def generate_key_from_password(password, salt = None, length = 128, iterations =
     if not isinstance(password, bytes):
         password = password.encode()
     if salt is None:
-        salt = get_random_number()    
+        # Base58 encode the salt
+        salt = Base58Encoder.encode(get_random_string())    
     kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length = length,
             salt = salt,
-            iterations = iterations,
+            iterations = NUM_ITERATIONS_PBKDF2,
             backend = backend )
     key = kdf.derive(password)
     # Base58 encode the key
@@ -106,7 +109,7 @@ def verify_key_from_password(key, password, salt, length = 128, iterations = 100
             algorithm=hashes.SHA256(),
             length = length,
             salt = salt,
-            iterations = iterations,
+            iterations = NUM_ITERATIONS_PBKDF2,
             backend = backend )
     # decode the Base58encode key
     try: 
@@ -114,8 +117,7 @@ def verify_key_from_password(key, password, salt, length = 128, iterations = 100
     except InvalidKey:
         raise IncorrectPasswordError('given password and salt do not generate the given key')    
     
-def generate_storage_hash_from_password(password, salt = None, length = 128, n = 2**14,
-                                        r = 8, p = 1 ):
+def generate_storage_hash_from_password(password, salt = None, length = 128):
     '''
     Given a password (`bytes`) and an optional salt this function
     derives the storage hash to be used for storing the password using the Scrypt kdf from
@@ -140,7 +142,7 @@ def generate_storage_hash_from_password(password, salt = None, length = 128, n =
     if not isinstance(password, bytes):
         password = password.encode()
     if salt is None:
-        salt = get_random_number()
+        salt = Base58Encoder.encode(get_random_string())
     
     if USE_SCRYPT:    
         kdf = Scrypt(salt = salt,
@@ -190,17 +192,104 @@ def verify_storage_hash_from_password(storage_hash, password, salt, length = 128
             verify_key_from_password(storage_hash, password, salt, length)
         except IncorrectPasswordError:
             raise IncorrectPasswordError('given password and salt do not generate the storage_hash')
-    
 
-if __name__ == '__main__':
-    password = 'sairam123'
-    salt = b'4b6kctx8B9AkiT6zqxxce9'
-    (key, salt) = generate_key_from_password(password, salt)
-    print(key, '\n', salt)
-    verify_key_from_password(key, password, salt)
-    (storage_hash, salt) = generate_storage_hash_from_password(password, salt)
-    print(storage_hash, '\n',salt)
-    verify_storage_hash_from_password(storage_hash, password, salt)
-    
 
+def encrypt(symmetric_key, data):
+    '''
+    Encrypt the given data using AES with the given symmetric key.
     
+    Args:
+        symmetric_key: Base58 encoded symmetric key to be used for encryption
+        data: data to be encrypted of type string or bytes  
+    
+    We use AES in the CBC mode with a randomly generated iv (initialization vector) of 16 bytes
+    (the AES block size). The iv is prepended to the encrypted data and when the encrypted data
+    is presented for decryption it must be extracted from there. 
+    
+    Returns:
+        the encrypted data with the iv prepended in bytes format
+    '''
+    if not isinstance(data, bytes):
+        data = data.encode()
+    # the given data has to be now padded to fit the block size (128 bits for AES) for encryption
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
+    padded_data = padder.update(data) + padder.finalize()
+    
+        
+    backend = default_backend()
+    # the AES block size is 128 bits ( = 16 bytes) and the initialization vector must be of the
+    # size as the block size 
+    iv = get_random_string(16)    
+    
+    # provide to AES the Base58decoded symmetric_key as that will be of the size as expected by AES
+    cipher = Cipher(algorithm = algorithms.AES(Base58Encoder.decode(symmetric_key)),
+                            mode= modes.CBC(iv), backend=backend)
+    
+    encryptor = cipher.encryptor()
+    encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
+    return (iv + encrypted_data)
+    
+def decrypt(symmetric_key, encrypted_data):
+    '''
+    Decrypt the given data using AES with the given symmetric key.
+    
+    Args:
+        symmetric_key: Base58 encoded symmetric key to be used for encryption
+        encrypted_data: data to be encrypted of type bytes  
+    
+    We use AES in the CBC mode with the iv (initialization vector) of 16 bytes
+    (the AES block size) extracted fromt the front of the encrypted data. 
+    
+    Returns:
+        the decrypted data as a bytes object.
+    '''
+    if not isinstance(encrypted_data, bytes):
+        data = encrypted_data.encode()
+    backend = default_backend()
+    
+    # the AES block size is provided in bits, and hence the division by 8 to get the corresponding byte size 
+    iv = encrypted_data[:16]    
+    encrypted_data = encrypted_data[16:]
+    
+    # provide to AES the Base58decoded symmetric_key as that will be of the size as expected by AES
+    cipher = Cipher(algorithm = algorithms.AES(Base58Encoder.decode(symmetric_key)),
+                            mode= modes.CBC(iv), backend=backend)
+    
+    # decrypt the provided data
+    decryptor = cipher.decryptor()
+    decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
+    
+    # unpad the decrypted data
+    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+    data = unpadder.update(decrypted_data) + unpadder.finalize()
+    
+    return data    
+
+def secret_sharing(secret, share_threshold = 2, num_shares = 3):
+    '''
+    To compute the `num_shares` splits of the given `secret` such that only when `share_threshold`
+    of these shares come together the given secret can be recovered.
+    Args:
+        secret: the secret in bytes or str
+        share_threshold: the threshold for the number of shares to come together for it to be possible
+            to reconstruct the secret
+        num_shares: the number of shares to be created
+    Returns a list of the shares 
+    '''
+    if isinstance(secret, bytes):
+        secret = secret.decode()
+    if share_threshold > num_shares:
+        raise ValueError('the share_threshold must be smaller than the num_shares')
+    return PlaintextToHexSecretSharer.split_secret(secret, share_threshold, num_shares)
+
+def secret_recovery(shares):
+    '''
+    To recover the secret string that had been split into shares from a list `shares` of shares.
+    Args:
+        shares: a list of the shares
+    Returns the recovered secret 
+    '''
+    if not isinstance(shares, list):
+        raise ValueError('a list of shares must be provided for secret recovery')
+    return PlaintextToHexSecretSharer.recover_secret(shares) 
+
