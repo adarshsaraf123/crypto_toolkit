@@ -11,7 +11,7 @@ Welcome to crypto_toolkit's documentation!
    :caption: Contents:
 
 .. automodule:: crypto_toolkit
-	:members:
+   :members:
 
 
 Indices and tables
