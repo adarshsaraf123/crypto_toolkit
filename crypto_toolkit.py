@@ -269,11 +269,14 @@ def secret_sharing(secret, share_threshold = 2, num_shares = 3):
     '''
     To compute the `num_shares` splits of the given `secret` such that only when `share_threshold`
     of these shares come together the given secret can be recovered.
+    
     Args:
+    
         secret: the secret in bytes or str
         share_threshold: the threshold for the number of shares to come together for it to be possible
             to reconstruct the secret
         num_shares: the number of shares to be created
+    
     Returns a list of the shares 
     '''
     if isinstance(secret, bytes):
@@ -285,8 +288,10 @@ def secret_sharing(secret, share_threshold = 2, num_shares = 3):
 def secret_recovery(shares):
     '''
     To recover the secret string that had been split into shares from a list `shares` of shares.
+    
     Args:
         shares: a list of the shares
+    
     Returns the recovered secret 
     '''
     if not isinstance(shares, list):

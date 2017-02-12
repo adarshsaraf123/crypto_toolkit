@@ -9,9 +9,10 @@ Welcome to crypto_toolkit's documentation!
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
-
-.. automodule:: crypto_toolkit
-   :members:
+    
+   crypto_guidelines
+   README
+   pydoc
 
 
 Indices and tables
